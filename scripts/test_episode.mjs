@@ -219,7 +219,7 @@ check(
   epCalls[3] > 0,
   `calls=${epCalls[3]}`
 );
-check('剧名 find 零调用（names:v1 整表命中）', findCalls === 0, `calls=${findCalls}`);
+check('剧名 find 零调用（names:v2 整表命中）', findCalls === 0, `calls=${findCalls}`);
 check(
   '第二轮 episodeResolvedThisRun === 0、episodeResolved === 3、episodeRemain === 1',
   stats2.episodeResolvedThisRun === 0 &&
