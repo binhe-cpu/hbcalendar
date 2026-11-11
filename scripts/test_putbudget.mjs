@@ -4,12 +4,12 @@
 // + 检查点收敛 + 快照跳写 + diag 刷盘节流后，预算为：稳态轮
 // ≤ 约 17 次、追赶轮 ≤ 约 30 次。本测试用计数 KV 桩实测：
 //   第一轮（冷缓存）：48 部夹具剧（两天各 24 部、每部 1 集），
-//     TMDB 打桩全部中文命中——断言本轮 put 总数 ≤ 30、names:v2
+//     TMDB 打桩全部中文命中——断言本轮 put 总数 ≤ 30、names:v3
 //     与 eps:v1 各 put ≤ 2 次、无任何逐条键（showname2: / ep:{id}）
 //     被写、剧名与集都真实解析了（resolvedThisRun /
 //     episodeResolvedThisRun 有量）；
 //   第二轮（同 env 全缓存命中）：断言 put 总数 ≤ 17、day:* put
-//     为 0（跳写生效：开局回填使三版快照内容一致）、names:v2 /
+//     为 0（跳写生效：开局回填使三版快照内容一致）、names:v3 /
 //     eps:v1 put 为 0（不 dirty 不写）、TMDB 基本零调用。
 // 用法：node scripts/test_putbudget.mjs
 import { aggregate } from '../src/index.js';
@@ -168,15 +168,15 @@ console.log(`  put 明细：${JSON.stringify(byPrefix)}，总计 ${puts1.length}
 check('剧名真实解析（resolvedThisRun ≥ 45）', stats1.resolvedThisRun >= 45, `${stats1.resolvedThisRun}`);
 check('集真实解析（episodeResolvedThisRun ≥ 42）', stats1.episodeResolvedThisRun >= 42, `${stats1.episodeResolvedThisRun}`);
 check('本轮 put 总数 ≤ 30', puts1.length <= 30, `${puts1.length}`);
-check("names:v2 put ≤ 2 次", env.CACHE.countPut((k) => k === 'names:v2') <= 2, `${env.CACHE.countPut((k) => k === 'names:v2')}`);
+check("names:v3 put ≤ 2 次", env.CACHE.countPut((k) => k === 'names:v3') <= 2, `${env.CACHE.countPut((k) => k === 'names:v3')}`);
 check("eps:v1 put ≤ 2 次", env.CACHE.countPut((k) => k === 'eps:v1') <= 2, `${env.CACHE.countPut((k) => k === 'eps:v1')}`);
 check(
   '无逐条键被写（showname2: / ep:{id} 均为 0）',
   !puts1.some((k) => k.startsWith('showname') || /^ep:\d/.test(k))
 );
-const namesTable = await env.CACHE.get('names:v2', { type: 'json' });
+const namesTable = await env.CACHE.get('names:v3', { type: 'json' });
 const epsTable = await env.CACHE.get('eps:v1', { type: 'json' });
-check('names:v2 整表条目 ≥ 45', Object.keys(namesTable ?? {}).length >= 45, `${Object.keys(namesTable ?? {}).length}`);
+check('names:v3 整表条目 ≥ 45', Object.keys(namesTable ?? {}).length >= 45, `${Object.keys(namesTable ?? {}).length}`);
 check('eps:v1 整表条目 ≥ 42', Object.keys(epsTable ?? {}).length >= 42, `${Object.keys(epsTable ?? {}).length}`);
 
 // ---- 第二轮：同 env，缓存全命中稳态轮 ----
@@ -197,7 +197,7 @@ check(
   env.CACHE.countPut((k) => k.startsWith('day:')) === 0,
   `${env.CACHE.countPut((k) => k.startsWith('day:'))}`
 );
-check("names:v2 put 为 0（不 dirty 不写）", env.CACHE.countPut((k) => k === 'names:v2') === 0);
+check("names:v3 put 为 0（不 dirty 不写）", env.CACHE.countPut((k) => k === 'names:v3') === 0);
 check("eps:v1 put 为 0（不 dirty 不写）", env.CACHE.countPut((k) => k === 'eps:v1') === 0);
 check('TMDB 基本零调用（整表全命中）', tmdbCalls <= 4, `${tmdbCalls}`);
 check('第二轮 remainUnresolved === 0', stats2.remainUnresolved === 0, `${stats2.remainUnresolved}`);
