@@ -136,12 +136,15 @@ function fnv(str) {
   return (h >>> 0).toString(16);
 }
 
-/// 是否国产 show——与 src/index.js 同判定
+/// 是否国产 show——与 src/index.js 同判定（判据含 language==='Chinese'
+/// 这一条：iQIYI 等频道的 webChannel.country 为 null 时靠它补判；
+/// 两处必须同步改）
 function isChineseShow(show, cnShowIds) {
   return (
     cnShowIds.has(show.id) ||
     show?.network?.country?.code === 'CN' ||
-    show?.webChannel?.country?.code === 'CN'
+    show?.webChannel?.country?.code === 'CN' ||
+    show?.language === 'Chinese'
   );
 }
 
