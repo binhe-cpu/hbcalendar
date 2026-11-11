@@ -1,11 +1,11 @@
-// 瞬时失败不落盘回归测试（v3；v6 起存储为 names:v2 整表）：
+// 瞬时失败不落盘回归测试（v3；v6 起存储为 names:v3 整表）：
 // 背景：v2 把 TMDB 的「查无此名」与「查询失败（429/超时/5xx）」都塌缩
 // 成 null 一律落负缓存，曾把冷启动风暴里的偶发失败冻结 7 天（TVmaze
 // 90035《The Remarried Empress》实锤）。v3 分型后断言：
 //   场景一 TMDB 全程 429 → resolveShow 结果标 transient、KV 里没有
 //         该 show 的缓存（下轮 cron 会重试），但本轮内存结果照常返回；
 //   场景二 TMDB 全程有结论（find 命中 id、detail 返回但名无中文）→
-//         负结果正常入 names:v2 整表（exp 7 天口径不变）、transient=false。
+//         负结果正常入 names:v3 整表（exp 7 天口径不变）、transient=false。
 // 另顺带断言 computeShowName 的 trace 轨迹（/resolve 端点同源数据）。
 // 用法：node scripts/test_resolve.mjs
 import { computeShowName, resolveShow } from '../src/index.js';
@@ -80,8 +80,8 @@ globalThis.fetch = (url) => {
     !env.CACHE.map.has('showname2:90035')
   );
   check(
-    'names:v2 整表也没有落盘（transient 不入表）',
-    !env.CACHE.map.has('names:v2')
+    'names:v3 整表也没有落盘（transient 不入表）',
+    !env.CACHE.map.has('names:v3')
   );
   check('KV 里也没有旧前缀 showname:90035', !env.CACHE.map.has('showname:90035'));
 }
@@ -106,9 +106,9 @@ globalThis.fetch = (url) => {
   console.log('\n场景二：TMDB 有结论但无中文名');
   const res = await resolveShow(env, SHOW, false, new Map(), {});
   check('结果不标 transient', res.transient === false, `transient=${res.transient}`);
-  const namesTable = await env.CACHE.get('names:v2', { type: 'json' });
+  const namesTable = await env.CACHE.get('names:v3', { type: 'json' });
   const saved = namesTable?.['90035'];
-  check('负结果已入 names:v2 整表', !!saved, saved ? `via=${saved.via}` : 'null');
+  check('负结果已入 names:v3 整表', !!saved, saved ? `via=${saved.via}` : 'null');
   check(
     '入表内容为原名、无 TMDB 采用',
     saved?.title === 'The Remarried Empress' && saved?.via === 'none'
