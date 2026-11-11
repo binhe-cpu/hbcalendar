@@ -20,7 +20,7 @@ Cron（每 30 分钟） / POST /refresh
  aggregate()：
    1. TVmaze /schedule/web + /schedule?country=CN|US|JP × 未来 7 天
       （按集 id 去重；CN 集与 web 集大量重叠，去重后按 show id 认国产）
-   2. 按 show 解析中文名（KV 整表缓存 names:v2，含负结果，exp 7 天）：
+   2. 按 show 解析中文名（KV 整表缓存 names:v3，含负结果，exp 7 天）：
       a. TMDB 优先：externals(imdb→thetvdb) → /find 精确换 id →
          /tv/{id}?language=zh-CN，name 含中文才采用；find 落空用原名
          /search/tv 标题搜索兜底（全等优先、无全等只认首条且归一化互含）；
@@ -319,11 +319,13 @@ node scripts/test_putbudget.mjs               # put 预算回归（v6）：计�
 ## 运维备忘
 
 - **KV 键一览**：`day:YYYY-MM-DD`（成品快照）、
-  `names:v2`（v6 补名整表：`{tvmazeId: 结论}` 一键存全部 show，
+  `names:v3`（v6 补名整表：`{tvmazeId: 结论}` 一键存全部 show，
   条目自带 exp——正负结论均 7 天，查空的 show 最迟 7 天后会被 cron
   重试、新剧中文资料补齐后能自愈；TMDB 瞬时失败的结果标 transient、
-  根本不入表。v7 起由 `names:v1` 换代：v1 存量含同名异剧错配出的
-  假 tmdbId 结论，整体作废，升级后首轮全量重查；v1 键不再读写）、
+  根本不入表。两轮整表换代：v7 由 v1 换代（v1 存量含同名异剧
+  错配出的假 tmdbId 结论）、v8 由 v2 换代（v2 存量含 isCn 漏判
+  language 路线下的一批 via=none 结论），旧键均整体作废、不再
+  读写，升级后首轮全量重查）、
   `eps:v1`（v6 集解析整表：`{epKey: {name, overview, exp}}`，
   正结果 exp 30 天、负结果 exp 7 天）、
   `bangumi:YYYY-MM-DD`（Bangumi 周表日缓存，TTL 24h）、
