@@ -98,8 +98,8 @@
 // 10 秒（phase=final 与超时计数增加除外）、里程碑放宽（补名每 25、
 // 集每 50）、每轮实际 put 硬顶约 10 次。
 // 写预算账（put/轮）：稳态轮 ≈ meta:diag ≤10（实际约 3）+
-// meta:lastRefresh 3 + day 0 + names:v2 0 + eps:v1 0 + bangumi ≈0
-// → ≤ 约 17；追赶轮（几百部待解析）≈ 稳态基数 + names:v2 ≤2 +
+// meta:lastRefresh 3 + day 0 + names:v3 0 + eps:v1 0 + bangumi ≈0
+// → ≤ 约 17；追赶轮（几百部待解析）≈ 稳态基数 + names:v3 ≤2 +
 // eps:v1 ≤1 + day 变更日 ≤7×2 → ≤ 约 30。全天 48 轮以稳态为主，
 // 合计 ≤ 约 850 次，留余量。
 //
@@ -126,7 +126,7 @@
 // 的 search_zh_pick 记命中的查询词与候选名。
 //
 // 环境变量 / 绑定（见 wrangler.toml 与 README）：
-// - CACHE        KV 绑定：day:YYYY-MM-DD 快照、names:v2 补名整表、
+// - CACHE        KV 绑定：day:YYYY-MM-DD 快照、names:v3 补名整表、
 //                eps:v1 集解析整表、meta（lastRefresh / diag）；
 //                showname2:{id} 与 ep:{tmdbId}:{s}:{e} 为旧版逐条键，
 //                v6 起已弃用（不删、自然过期）
@@ -142,7 +142,7 @@ const EP_TTL_NEG_SEC = 7 * 24 * 3600; // 集解析负结果（有结论但无中
 const RUN_TIMEBOX_MS = 50 * 1000; // 单轮聚合时间盒（v2）：补名到点就停，余量留给下一轮 cron
 const EP_PREREAD_GRACE_MS = 60 * 1000; // v5-diag2：集 KV 预读宽限——v6 整表化后预读改为内存查表回填、不再走 KV，此宽限已无适用点，保留备查
 // v6 省写（见文件头 v6 段）：整表缓存键 + diag 刷盘节流
-const NAMES_TABLE_KEY = 'names:v2'; // 剧名缓存整表：{ [showId]: {title, via, tmdbId, poster, overview, exp} }（v7：v1 里存了错 id 结论，整表换代作废重查）
+const NAMES_TABLE_KEY = 'names:v3'; // 剧名缓存整表：{ [showId]: {title, via, tmdbId, poster, overview, exp} }（v8 换代：v2 里存了 isCn 漏判——language 路线未算国产、从不查 aka 与中文搜索——下的一批 via=none 结论，整表作废重查；v2 本身系 v7 为 v1 的错 id 结论换代而来）
 const EPS_TABLE_KEY = 'eps:v1'; // 集缓存整表：{ [epKey]: {name, overview, exp} }
 const DIAG_FLUSH_MIN_MS = 10 * 1000; // diag 刷盘最小间隔（phase=final / 超时计数增加除外）
 const DIAG_PUT_CAP = 9; // diag 每轮实际 put 硬顶（非收尾刷盘；收尾定格另计 1，总计约 10）
@@ -315,7 +315,7 @@ async function kvPut(env, key, value, opts) {
   return !r.error;
 }
 
-// ---------------- v6 整表缓存（names:v2 / eps:v1） ----------------
+// ---------------- v6 整表缓存（names:v3 / eps:v1） ----------------
 //
 // 旧版逐条键（showname2:{id} / ep:{...}）每解析一条就 1 次 put，
 // 是 KV 每日写配额爆掉的主因。v6 改为单键整表：开局 1 次 get 读入
@@ -870,12 +870,17 @@ async function akaName(showId) {
   return akaTitleOf(await akaNames(showId));
 }
 
-/// 是否国产 show：在 CN 排期出现过，或 network/webChannel 国家为 CN
-function isChineseShow(show, cnShowIds) {
+/// 是否国产 show：在 CN 排期出现过，或 network/webChannel 国家为 CN，
+/// 或 show 语言为 Chinese。语言信号补的是频道国家漏判：TVmaze 给部分
+/// 频道的 webChannel.country 为 null（如 iQIYI 之于 94262《The
+/// Confession Truth》），频道国家与 CN 排期都落空时 language 是唯一
+/// 还在线的国产信号。server.mjs 里有一份等价复制，两处必须同步改。
+export function isChineseShow(show, cnShowIds) {
   return (
     cnShowIds.has(show.id) ||
     show?.network?.country?.code === 'CN' ||
-    show?.webChannel?.country?.code === 'CN'
+    show?.webChannel?.country?.code === 'CN' ||
+    show?.language === 'Chinese'
   );
 }
 
@@ -885,7 +890,7 @@ function isChineseShow(show, cnShowIds) {
 /// - transient 结果（TMDB 有瞬时失败、没拿到中文名）→ 不入缓存，
 ///   只进进程内 memo 本轮用，下轮 cron 必然重新解析，不再把偶发
 ///   失败冻结成 7 天的假结论。
-/// v6 存储：缓存是 names:v2 整表（内存 Map，由 aggregate 开局读入、
+/// v6 存储：缓存是 names:v3 整表（内存 Map，由 aggregate 开局读入、
 /// 经 runCtx.namesTable 传入），命中直接查表，新结论只标 dirty，
 /// 落盘由 aggregate 在补名后检查点与收尾统一整表 put。无聚合上下
 /// 文单独调用时（回归测试）自读整表、得出结论后自行落盘。
@@ -1201,7 +1206,7 @@ async function buildAndWriteDays(env, days, perDay, bangumiRaw, nameByShowId, ep
   return stats;
 }
 
-/// 补名前的缓存预热（v6 整表版）：names:v2 整表已在 aggregate 开局
+/// 补名前的缓存预热（v6 整表版）：names:v3 整表已在 aggregate 开局
 /// 读入内存，这里纯内存查表把已缓存的补名结果填进 nameByShowId /
 /// runCache——旧版逐 show 一次 KV get（约 600 次/轮）整段消失。
 /// 让检查点 ① 的快照就带上已解析的名字（未命中的留待补名现算）。
@@ -1383,7 +1388,7 @@ export async function aggregate(env) {
 
   // 4) 检查点 ①：先把整表缓存预热进来，排期 + Bangumi 就绪即写一版
   //    快照与 meta —— /calendar、/health 不必等整轮补名跑完才有东西。
-  //    v6：names:v2 / eps:v1 各 1 次 get 读入内存整表；剧名 seed 纯
+  //    v6：names:v3 / eps:v1 各 1 次 get 读入内存整表；剧名 seed 纯
   //    内存查表；集缓存在这里就按 seed 后的剧名回填 epByKey，让检
   //    查点 ① 的快照带上已缓存的集名——稳态轮三版快照内容因此一
   //    致、day 跳写全免（旧版集 seed 在集阶段才做，检查点与最终版
