@@ -1,0 +1,19 @@
+name = "hbcalendar"
+main = "src/index.js"
+compatibility_date = "2026-10-15"
+
+# 每 30 分钟跑一轮预聚合（scheduled handler → aggregate）
+[triggers]
+crons = ["*/30 * * * *"]
+
+# KV：存 day:YYYY-MM-DD 快照、showname:{id} 补名缓存、meta
+# TODO: 先执行 `wrangler kv namespace create hbcalendar-cache`，
+#       把输出的 id 回填到下面（部署步骤见 README「部署」一节）
+[[kv_namespaces]]
+binding = "CACHE"
+id = "TODO_REPLACE_WITH_KV_NAMESPACE_ID"
+# preview_id = "TODO_REPLACE_WITH_KV_PREVIEW_ID"  # 用 wrangler dev --remote 时才需要
+
+# 机密不写在这里，用 secret 注入：
+#   wrangler secret put TMDB_TOKEN    # TMDB 只读访问令牌（可不设，未设则跳过 TMDB 补名）
+#   wrangler secret put REFRESH_KEY   # /refresh 端点密钥（未设则禁用该端点）

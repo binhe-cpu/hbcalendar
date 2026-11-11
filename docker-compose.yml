@@ -1,0 +1,32 @@
+services:
+  app:
+    # 官方镜像（GitHub Actions 双架构构建，见 .github/workflows/docker.yml）
+    image: ghcr.io/binhe-cpu/hbcalendar:latest
+    # 本地构建时启用下面这行、注释掉上面的 image
+    # build: .
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      RUN_TIMEBOX_MS: "600000"
+      TMDB_PACE_MS: "100"
+      AGG_INTERVAL_MS: "1800000"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

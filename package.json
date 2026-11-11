@@ -1,0 +1,1 @@
+{"description":"HBPlayer 追剧日历预聚合服务（Cloudflare Worker）：服务端拼 TVmaze + Bangumi + TMDB 中文名，客户端一天一个请求拿成品","name":"hbcalendar-worker","private":true,"scripts":{"deploy":"wrangler deploy","dev":"wrangler dev","test:local":"node scripts/local_run.mjs"},"type":"module","version":"1.0.0"}
