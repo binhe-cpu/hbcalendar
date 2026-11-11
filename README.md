@@ -240,7 +240,7 @@ https://hbcalendar.<你的子域>.workers.dev
 - 一个域名，把它的 A/AAAA 记录解析到这台服务器（Caddy 靠它自动
   签发 HTTPS 证书）；`Caddyfile` 里写的就是这个域名。
 
-### 部署（四步）
+### 部署（五步）
 
 镜像由 GitHub Actions 构建并发布在 GHCR
 （`ghcr.io/binhe-cpu/hbcalendar`，amd64 + arm64 双架构，甲骨文等
@@ -258,7 +258,13 @@ vi .env
 # 3) 如域名不是 hbplayer.hbyun.eu.org，改 Caddyfile 第一行
 vi Caddyfile
 
-# 4) 拉镜像并启动（app 服务 + Caddy 反向代理）
+# 4) 预建数据目录并改属主（重要）：./data 会 bind 挂载进容器，应用在
+#    容器内以 uid 1000 运行；若目录不存在，Docker 会以 root 身份自动
+#    创建（root:root 755），容器里写不进去，聚合会「跑通但存不下」、
+#    /health 一直是空的——先建好并 chown 可免此坑
+mkdir -p data && sudo chown 1000:1000 data
+
+# 5) 拉镜像并启动（app 服务 + Caddy 反向代理）
 docker compose pull && docker compose up -d
 ```
 
