@@ -17,9 +17,13 @@
 //         「自首真相」：D1 搜「杀人真相」即回该条目（候选名≠查询词、
 //         靠别名集判据采纳）；D2 前两词落空、第三词才命中（逐个搜）。
 //         期望 tmdbId=该条目、title=自首真相（detail 中文名）。
+//   用例 E（94262 真身形状，v8 isCn 漏判）→ webChannel.country=null、
+//         network=null、language='Chinese'、不在 cnShowIds：isCn 必须
+//         靠 language 判真，否则 aka/中文搜索整条链不跑（线上实测
+//         via=none、trace 无 aka 步）；判真后完整链跑通、结果同 D。
 // 内存 KV + TMDB/TVmaze 全打桩，风格照 test_resolve。
 // 用法：node scripts/test_search_guard.mjs
-import { computeShowName } from '../src/index.js';
+import { computeShowName, isChineseShow } from '../src/index.js';
 
 class MemoryKV {
   constructor() {
@@ -364,6 +368,48 @@ globalThis.fetch = (url) => {
     'trace: 中文搜索共试了 3 个别名、命中查询词=自首真相',
     zhFetches.length === 3 && zp?.query === '自首真相',
     `fetches=${zhFetches.length} query=${zp?.query}`
+  );
+}
+
+// ---- 用例 E：94262 真身形状——country=null、靠 language 判 isCn ----
+const SHOW_E = {
+  id: 94262,
+  name: 'The Confession Truth',
+  premiered: '2026-11-07',
+  language: 'Chinese',
+  externals: { tvrage: null, thetvdb: null, imdb: null },
+  network: null,
+  webChannel: { name: 'iQIYI', country: null },
+};
+{
+  console.log('\n用例 E：webChannel.country=null，language 补判 isCn');
+  check(
+    'isChineseShow(language=Chinese) = true（不在 cnShowIds、无国家信号）',
+    isChineseShow(SHOW_E, new Set()) === true
+  );
+  check(
+    '对照：language=English 同形状 = false（真值确实来自 language）',
+    isChineseShow({ ...SHOW_E, language: 'English' }, new Set()) === false
+  );
+  dSearchMap = {
+    'The Confession Truth': [ENTRY_D],
+    '杀人真相': [ENTRY_D],
+    '炬火': [],
+    '自首真相': [ENTRY_D],
+  };
+  const trace = [];
+  const isCn = isChineseShow(SHOW_E, new Set());
+  const res = await computeShowName(mkEnv(), SHOW_E, isCn, trace);
+  check('tmdbId = 正条目 276001', res.tmdbId === 276001, `tmdbId=${res.tmdbId}`);
+  check(
+    "title = 自首真相、via='tmdb'（aka+中文搜索链已跑通）",
+    res.title === '自首真相' && res.via === 'tmdb',
+    `title=${res.title} via=${res.via}`
+  );
+  check(
+    'trace: 有中文搜索步（漏判时整条链缺席）',
+    trace.some((s) => s.step === 'search_zh_pick'),
+    JSON.stringify(trace.map((s) => s.step))
   );
 }
 
