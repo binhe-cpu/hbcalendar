@@ -98,13 +98,35 @@
 // 10 秒（phase=final 与超时计数增加除外）、里程碑放宽（补名每 25、
 // 集每 50）、每轮实际 put 硬顶约 10 次。
 // 写预算账（put/轮）：稳态轮 ≈ meta:diag ≤10（实际约 3）+
-// meta:lastRefresh 3 + day 0 + names:v1 0 + eps:v1 0 + bangumi ≈0
-// → ≤ 约 17；追赶轮（几百部待解析）≈ 稳态基数 + names:v1 ≤2 +
+// meta:lastRefresh 3 + day 0 + names:v2 0 + eps:v1 0 + bangumi ≈0
+// → ≤ 约 17；追赶轮（几百部待解析）≈ 稳态基数 + names:v2 ≤2 +
 // eps:v1 ≤1 + day 变更日 ≤7×2 → ≤ 约 30。全天 48 轮以稳态为主，
 // 合计 ≤ 约 850 次，留余量。
 //
+// v7（同名错配，2026-11-11）：TVmaze 78021《走马上任》英文名
+// Let's Go 在 TMDB 搜索里全等撞上 1976 年加拿大同名儿童节目
+// （id 11932），detail 无中文、剧名靠 aka 兜底成了中文，但错 id
+// 被存进缓存、集解析照着 1976 年那部查 22/23 集自然全空，海报
+// 也空着。本版只改剧名解析：①国产 show 有中文别名时，补一轮按
+// 中文名搜 TMDB，中文名全等的候选优先于英文搜名结果；②年份护栏：
+// 候选 first_air_date 年份与 TVmaze premiered 年份差 > 2 年直接
+// 否决（1976 对 2026 一票出局），任一方无年份时放行；③剧名缓存
+// 整表换代 names:v1→v2，已存的错结论一次性作废、下一轮重查。
+// eps:v1 不换代（键按 TMDB id 定位，错 id 下的旧条目不再命中、
+// 自然 orphan）；逐条旧键与 TTL、transient 分型全不动。
+//
+// v7 补（94262 案，2026-11-11）：TVmaze 94262《The Confession Truth》
+// （iQIYI、2026-11-07 首播、无 externals）的 CN aka 有杀人真相 /
+// 炬火 / 自首真相三个，TMDB 正条目名是第三个「自首真相」——只搜
+// 第一个别名对不上、只认「候选等于查询词」也对不上（英文搜索其实
+// 返回了这条，但 zh 结果名与英文查询串既不全等也不互含、被挑人
+// 规则拒掉，是英文兜底对国产剧的结构性失效）。中文轮改：全部 CN
+// aka 逐个搜（上限 4 个），候选 name/original_name 归一化后命中
+// 任意一个 CN aka 即采纳，title 以 TMDB detail 中文名为准，trace
+// 的 search_zh_pick 记命中的查询词与候选名。
+//
 // 环境变量 / 绑定（见 wrangler.toml 与 README）：
-// - CACHE        KV 绑定：day:YYYY-MM-DD 快照、names:v1 补名整表、
+// - CACHE        KV 绑定：day:YYYY-MM-DD 快照、names:v2 补名整表、
 //                eps:v1 集解析整表、meta（lastRefresh / diag）；
 //                showname2:{id} 与 ep:{tmdbId}:{s}:{e} 为旧版逐条键，
 //                v6 起已弃用（不删、自然过期）
@@ -120,7 +142,7 @@ const EP_TTL_NEG_SEC = 7 * 24 * 3600; // 集解析负结果（有结论但无中
 const RUN_TIMEBOX_MS = 50 * 1000; // 单轮聚合时间盒（v2）：补名到点就停，余量留给下一轮 cron
 const EP_PREREAD_GRACE_MS = 60 * 1000; // v5-diag2：集 KV 预读宽限——v6 整表化后预读改为内存查表回填、不再走 KV，此宽限已无适用点，保留备查
 // v6 省写（见文件头 v6 段）：整表缓存键 + diag 刷盘节流
-const NAMES_TABLE_KEY = 'names:v1'; // 剧名缓存整表：{ [showId]: {title, via, tmdbId, poster, overview, exp} }
+const NAMES_TABLE_KEY = 'names:v2'; // 剧名缓存整表：{ [showId]: {title, via, tmdbId, poster, overview, exp} }（v7：v1 里存了错 id 结论，整表换代作废重查）
 const EPS_TABLE_KEY = 'eps:v1'; // 集缓存整表：{ [epKey]: {name, overview, exp} }
 const DIAG_FLUSH_MIN_MS = 10 * 1000; // diag 刷盘最小间隔（phase=final / 超时计数增加除外）
 const DIAG_PUT_CAP = 9; // diag 每轮实际 put 硬顶（非收尾刷盘；收尾定格另计 1，总计约 10）
@@ -293,7 +315,7 @@ async function kvPut(env, key, value, opts) {
   return !r.error;
 }
 
-// ---------------- v6 整表缓存（names:v1 / eps:v1） ----------------
+// ---------------- v6 整表缓存（names:v2 / eps:v1） ----------------
 //
 // 旧版逐条键（showname2:{id} / ep:{...}）每解析一条就 1 次 put，
 // 是 KV 每日写配额爆掉的主因。v6 改为单键整表：开局 1 次 get 读入
@@ -344,6 +366,12 @@ function norm(s) {
 /// 是否含中文（与 App _hasCjk 一致：CJK 统一表意 4E00–9FFF）
 function hasCjk(s) {
   return /[\u4E00-\u9FFF]/.test(s ?? '');
+}
+
+/// 取年份（'2026-11-02' → 2026；空 / 无 4 位数 → null，调用方按「未知」放行）
+function parseYear(s) {
+  const m = /(\d{4})/.exec(String(s ?? ''));
+  return m ? parseInt(m[1], 10) : null;
 }
 
 /// 剥 HTML 标签并收拾空白/实体（与 App 的 summary 入库口径一致）
@@ -590,9 +618,36 @@ function pickSearchResult(results, queryTitle) {
   return null;
 }
 
+/// 年份护栏（v7 走马上任案，只管 search 挑人、find 外部 id 路径不设）：
+/// 候选被采纳前比对年份——候选 first_air_date 与 TVmaze premiered
+/// 两边都有年份且相差 > 2 年 → 同名异剧，否决（视同没挑中），trace
+/// 记 search_reject 及原因；任一侧无年份 → 放行（宁可错留、不错杀）。
+function guardSearchPick(pick, show, trace, source) {
+  if (!pick) return null;
+  const cy = parseYear(pick.first_air_date);
+  const sy = parseYear(show?.premiered);
+  if (cy == null || sy == null || Math.abs(cy - sy) <= 2) return pick;
+  if (trace) {
+    trace.push({
+      step: 'search_reject',
+      source, // 'search' | 'search_zh'
+      reason: 'year_mismatch',
+      tmdbId: pick.id ?? null,
+      name: pick.name ?? null,
+      firstAirDate: pick.first_air_date ?? null,
+      premiered: show?.premiered ?? null,
+    });
+  }
+  return null;
+}
+
 /// 单个 show 的中文名解析：
 /// 1) TMDB externals 精确换 id → detail（zh-CN）：name 含 CJK 才采用；
 ///    find 落空再标题搜索兜底。只要 TMDB id 定下来，海报/zh 简介一并带回。
+///    v7：find 落空时国产 show 先按中文别名多搜一轮（全部 CN aka
+///    逐个搜、候选名命中任一 aka 即采纳、优先于英文轮），两轮挑中
+///    的候选在采纳前都过年份护栏（候选首播年与 TVmaze 首播年差
+///    >2 年否决，trace 记 search_reject）。
 /// 2) TMDB 没给出中文名且是国产 show → TVmaze akas（CN 优先含 CJK 第一个）。
 /// 3) 都没有 → 保留 TVmaze 原名。
 /// v3 瞬时标记：TMDB 任一步 failed 且最终标题仍无中文 → transient=true，
@@ -621,6 +676,17 @@ export async function computeShowName(env, show, isCn, trace, runCtx) {
     return base;
   };
 
+  // v7 走马上任案：中文别名整表只取一次，中文搜名轮与后面兜底共用；
+  // trace 的 aka 步仍记单个补名标题（口径不变）。
+  let akaList = null;
+  const fetchAkaOnce = async () => {
+    if (akaList) return akaList;
+    diagTouch({ lastShowId: show.id });
+    akaList = await akaNames(show.id);
+    if (trace) trace.push({ step: 'aka', result: akaTitleOf(akaList) });
+    return akaList;
+  };
+
   if (env.TMDB_TOKEN) {
     const ext = show.externals ?? {};
     let tmdbFailed = false;
@@ -646,24 +712,85 @@ export async function computeShowName(env, show, isCn, trace, runCtx) {
       else tmdbId = f.data?.tv_results?.[0]?.id ?? null;
     }
     if (tmdbId == null) {
-      if (pastDeadline()) return bail();
-      const s = await tmdbFetch(
-        env,
-        `/search/tv?query=${encodeURIComponent(show.name)}&language=zh-CN&page=1`,
-        { label: 'search', trace, tmdbStats }
-      );
-      if (s.kind === 'failed') {
-        tmdbFailed = true;
-      } else {
-        const pick = pickSearchResult(s.data?.results ?? [], show.name);
-        if (trace) {
-          trace.push({
-            step: 'search_pick',
-            tmdbId: pick?.id ?? null,
-            name: pick?.name ?? null,
-          });
+      // v7：国产 show 先用中文别名多搜一轮——中文轮命中优先于英文
+      // 搜名结果（走马上任案：英文名 Let's Go 全等撞上 1976 年同名
+      // 节目；94262 案：别名逐个搜、候选命中任一别名即采纳，详见
+      // 下方 CN 轮注释）。中文轮没命中再走英文轮，两轮都过年份护栏。
+      if (isCn) {
+        if (pastDeadline()) return bail();
+        const akas = await fetchAkaOnce();
+        // v7 补（94262 案）：全部 CN aka 逐个拿去搜（含 CJK 的、上限
+        // 4 个），采纳判据放宽为「候选 name/original_name 归一化后
+        // 命中任意一个 CN aka」——TMDB 正条目可能用的是另一个别名
+        // （搜「杀人真相」回的候选名是「自首真相」，同属别名集），
+        // 只认等于本次查询词会把正主拒掉。命中后照常过年份护栏，
+        // title 以 detail 的中文名为准；search_zh_pick 记命中的查
+        // 询词与候选名。某词查询失败只标 tmdbFailed、继续试下一词。
+        const akaSet = new Set(akas.map((n) => norm(n)));
+        const terms = akas.filter((n) => hasCjk(n)).slice(0, 4);
+        let zhPick = null;
+        let zhQuery = null;
+        for (const term of terms) {
+          if (pastDeadline()) return bail();
+          const zs = await tmdbFetch(
+            env,
+            `/search/tv?query=${encodeURIComponent(term)}&language=zh-CN&page=1`,
+            { label: 'search_zh', trace, tmdbStats }
+          );
+          if (zs.kind === 'failed') {
+            tmdbFailed = true;
+            continue;
+          }
+          const raw =
+            (zs.data?.results ?? []).find(
+              (r) =>
+                akaSet.has(norm(r?.name)) ||
+                akaSet.has(norm(r?.original_name))
+            ) ?? null;
+          const pick = guardSearchPick(raw, show, trace, 'search_zh');
+          if (pick) {
+            zhPick = pick;
+            zhQuery = term;
+            break;
+          }
         }
-        if (pick) tmdbId = pick.id;
+        if (terms.length > 0) {
+          if (trace) {
+            trace.push({
+              step: 'search_zh_pick',
+              tmdbId: zhPick?.id ?? null,
+              name: zhPick?.name ?? null,
+              query: zhQuery,
+            });
+          }
+          if (zhPick) tmdbId = zhPick.id;
+        }
+      }
+      if (tmdbId == null) {
+        if (pastDeadline()) return bail();
+        const s = await tmdbFetch(
+          env,
+          `/search/tv?query=${encodeURIComponent(show.name)}&language=zh-CN&page=1`,
+          { label: 'search', trace, tmdbStats }
+        );
+        if (s.kind === 'failed') {
+          tmdbFailed = true;
+        } else {
+          const pick = guardSearchPick(
+            pickSearchResult(s.data?.results ?? [], show.name),
+            show,
+            trace,
+            'search'
+          );
+          if (trace) {
+            trace.push({
+              step: 'search_pick',
+              tmdbId: pick?.id ?? null,
+              name: pick?.name ?? null,
+            });
+          }
+          if (pick) tmdbId = pick.id;
+        }
       }
     }
     if (tmdbId != null) {
@@ -704,11 +831,9 @@ export async function computeShowName(env, show, isCn, trace, runCtx) {
 
   if (isCn) {
     if (pastDeadline()) return bail();
-    diagTouch({ lastShowId: show.id });
-    const aka = await akaName(show.id);
-    if (trace) trace.push({ step: 'aka', result: aka });
-    if (aka) {
-      base.title = aka;
+    const zhName = akaTitleOf(await fetchAkaOnce()); // v7：中文轮已取过则复用，不重复请求
+    if (zhName) {
+      base.title = zhName;
       base.via = 'aka';
     }
   }
@@ -718,20 +843,31 @@ export async function computeShowName(env, show, isCn, trace, runCtx) {
   return base;
 }
 
-/// TVmaze 别名补名：CN aka 里优先第一个含 CJK 的（吞噬星空拼音在前的教训），
-/// 全无 CJK 才回落第一个非空
-async function akaName(showId) {
+/// TVmaze 别名列表（CN）：按站方顺序返回全部 CN aka 名（去空、去重）。
+/// v7 补（94262 案）：一部剧的 CN aka 可以有好几个，TMDB 正条目可能
+/// 用的是其中任意一个（《The Confession Truth》aka 为杀人真相 / 炬火
+/// / 自首真相，TMDB 条目名是第三个）——补名取单个、搜名用整表，分开供。
+async function akaNames(showId) {
   const list = await fetchJson(`${TVMAZE}/shows/${showId}/akas`, { label: 'aka' });
-  if (!Array.isArray(list)) return null;
-  let firstAny = null;
+  if (!Array.isArray(list)) return [];
+  const out = [];
   for (const a of list) {
     if (a?.country?.code !== 'CN') continue;
     const n = (a?.name ?? '').trim();
-    if (!n) continue;
-    if (hasCjk(n)) return n;
-    if (firstAny == null) firstAny = n;
+    if (n && !out.includes(n)) out.push(n);
   }
-  return firstAny;
+  return out;
+}
+
+/// 别名表 → 单个补名标题：优先第一个含 CJK 的（吞噬星空拼音在前的
+/// 教训），全无 CJK 才回落第一个非空
+function akaTitleOf(names) {
+  return names.find((n) => hasCjk(n)) ?? names[0] ?? null;
+}
+
+/// TVmaze 别名补名（单名版，口径 = akaTitleOf(akaNames(id))）
+async function akaName(showId) {
+  return akaTitleOf(await akaNames(showId));
 }
 
 /// 是否国产 show：在 CN 排期出现过，或 network/webChannel 国家为 CN
@@ -749,7 +885,7 @@ function isChineseShow(show, cnShowIds) {
 /// - transient 结果（TMDB 有瞬时失败、没拿到中文名）→ 不入缓存，
 ///   只进进程内 memo 本轮用，下轮 cron 必然重新解析，不再把偶发
 ///   失败冻结成 7 天的假结论。
-/// v6 存储：缓存是 names:v1 整表（内存 Map，由 aggregate 开局读入、
+/// v6 存储：缓存是 names:v2 整表（内存 Map，由 aggregate 开局读入、
 /// 经 runCtx.namesTable 传入），命中直接查表，新结论只标 dirty，
 /// 落盘由 aggregate 在补名后检查点与收尾统一整表 put。无聚合上下
 /// 文单独调用时（回归测试）自读整表、得出结论后自行落盘。
@@ -1065,7 +1201,7 @@ async function buildAndWriteDays(env, days, perDay, bangumiRaw, nameByShowId, ep
   return stats;
 }
 
-/// 补名前的缓存预热（v6 整表版）：names:v1 整表已在 aggregate 开局
+/// 补名前的缓存预热（v6 整表版）：names:v2 整表已在 aggregate 开局
 /// 读入内存，这里纯内存查表把已缓存的补名结果填进 nameByShowId /
 /// runCache——旧版逐 show 一次 KV get（约 600 次/轮）整段消失。
 /// 让检查点 ① 的快照就带上已解析的名字（未命中的留待补名现算）。
@@ -1247,7 +1383,7 @@ export async function aggregate(env) {
 
   // 4) 检查点 ①：先把整表缓存预热进来，排期 + Bangumi 就绪即写一版
   //    快照与 meta —— /calendar、/health 不必等整轮补名跑完才有东西。
-  //    v6：names:v1 / eps:v1 各 1 次 get 读入内存整表；剧名 seed 纯
+  //    v6：names:v2 / eps:v1 各 1 次 get 读入内存整表；剧名 seed 纯
   //    内存查表；集缓存在这里就按 seed 后的剧名回填 epByKey，让检
   //    查点 ① 的快照带上已缓存的集名——稳态轮三版快照内容因此一
   //    致、day 跳写全免（旧版集 seed 在集阶段才做，检查点与最终版
