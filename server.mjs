@@ -45,6 +45,9 @@ const UA = 'HBPlayer/1.0 (hbcalendar-server)';
 class FileKV {
   constructor(dir) {
     this.dir = dir;
+    // 写失败计数：聚合层对写失败是静默吞的（不让单次写失败打崩整轮），
+    // 这里留痕 + 首败大声报，避免「跑通了却存不下」的无声空转。
+    this.putFailures = 0;
   }
 
   fileFor(key) {
@@ -85,20 +88,31 @@ class FileKV {
   }
 
   async put(key, value, opts) {
-    let exp = null;
-    if (opts && typeof opts.expirationTtl === 'number') {
-      exp = Date.now() + opts.expirationTtl * 1000;
-    } else if (opts && typeof opts.expiration === 'number') {
-      exp = opts.expiration * 1000;
+    try {
+      let exp = null;
+      if (opts && typeof opts.expirationTtl === 'number') {
+        exp = Date.now() + opts.expirationTtl * 1000;
+      } else if (opts && typeof opts.expiration === 'number') {
+        exp = opts.expiration * 1000;
+      }
+      const envelope = JSON.stringify({ exp, value: String(value) });
+      await fs.mkdir(this.dir, { recursive: true });
+      const target = this.fileFor(key);
+      const tmp = `${target}.tmp-${process.pid}-${Math.random()
+        .toString(36)
+        .slice(2)}`;
+      await fs.writeFile(tmp, envelope, 'utf8');
+      await fs.rename(tmp, target); // 原子落盘
+    } catch (e) {
+      this.putFailures++;
+      if (this.putFailures === 1) {
+        console.error(
+          `[hbcalendar] ERROR: 数据目录写入失败（${this.dir}）：${e?.message ?? e} —— ` +
+            '聚合结果将无法落盘，请检查目录权限（docker bind 挂载的 ./data 属主应为 uid 1000）'
+        );
+      }
+      throw e; // 调用方（index.js 的 kvPut / flushDiag）本就按写失败处理
     }
-    const envelope = JSON.stringify({ exp, value: String(value) });
-    await fs.mkdir(this.dir, { recursive: true });
-    const target = this.fileFor(key);
-    const tmp = `${target}.tmp-${process.pid}-${Math.random()
-      .toString(36)
-      .slice(2)}`;
-    await fs.writeFile(tmp, envelope, 'utf8');
-    await fs.rename(tmp, target); // 原子落盘
   }
 
   async delete(key) {
@@ -181,7 +195,8 @@ async function runAggregateOnce(trigger) {
     console.log(
       `[aggregate] done (${trigger}): ${stats.durationMs}ms, ` +
         `resolvedThisRun=${stats.resolvedThisRun}, remain=${stats.remainUnresolved}, ` +
-        `episodes +${stats.episodeResolvedThisRun ?? 0}`
+        `episodes +${stats.episodeResolvedThisRun ?? 0}, ` +
+        `writeFailures=${env.CACHE.putFailures ?? 0}`
     );
     return true;
   } catch (e) {
@@ -373,6 +388,22 @@ server.listen(PORT, () => {
       `REFRESH_KEY: ${env.REFRESH_KEY ? 'configured' : 'NOT set (/refresh 禁用)'}, ` +
       `interval: ${AGG_INTERVAL_MS}ms`
   );
+  // 启动探写：数据目录写不进去时，聚合会「跑通但存不下」（写失败在聚合
+  // 层静默），/health 会一直是空的。开机先探一笔，写不了立刻大声报。
+  void (async () => {
+    const probe = path.join(DATA_DIR, '.write-probe');
+    try {
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      await fs.writeFile(probe, 'ok', 'utf8');
+      await fs.unlink(probe);
+    } catch (e) {
+      console.error(
+        `[hbcalendar] ERROR: 数据目录 ${DATA_DIR} 不可写（${e?.message ?? e}），聚合结果无法落盘！` +
+          '若用 docker compose 的 ./data bind 挂载且该目录由 root 创建：先执行 ' +
+          'sudo chown -R 1000:1000 ./data 再重启容器。'
+      );
+    }
+  })();
 });
 
 // 启动 5 秒后先跑一轮，之后按间隔滚动；进程常驻即调度常驻。
