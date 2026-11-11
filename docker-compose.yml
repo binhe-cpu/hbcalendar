@@ -4,6 +4,11 @@ services:
     image: ghcr.io/binhe-cpu/hbcalendar:latest
     # 本地构建时启用下面这行、注释掉上面的 image
     # build: .
+    # 已有反向代理（nginx / 1Panel / 另一个 Caddy 等）在管 80/443 时：
+    # 删掉下面的 caddy 服务，并启用这两行，把应用端口只映射到本机，
+    # 再在现有代理里给本站域名加一条反代到 127.0.0.1:8787
+    # ports:
+    #   - "127.0.0.1:8787:8787"
     env_file: .env
     environment:
       DATA_DIR: /data
